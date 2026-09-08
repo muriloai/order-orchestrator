@@ -13,6 +13,15 @@ Microsserviço de processamento de pedidos baseado em arquitetura orientada a ev
 
 ## Estrutura da Solução
 
+```mermaid
+graph TD
+    Api[OrderOrchestrator.Api] --> Application[OrderOrchestrator.Application]
+    Api --> Infrastructure[OrderOrchestrator.Infrastructure]
+    Infrastructure --> Application
+    Infrastructure --> Domain[OrderOrchestrator.Domain]
+    Application --> Domain
+```
+
 * OrderOrchestrator.Domain. Regras centrais de negócio. Contratos de repositório. Entidades com identificadores Guid v7.
 * OrderOrchestrator.Application. Casos de uso. Contratos de mensageria. DTOs.
 * OrderOrchestrator.Infrastructure. Mapeamento relacional com EF Core. Implementação do publicador no RabbitMQ. Serviços em segundo plano.
