@@ -27,7 +27,9 @@ public class CreateOrderUseCase
 
         await _orderRepository.AddAsync(order, cancellationToken);
 
+        var eventId = Guid.CreateVersion7();
         var orderCreatedEvent = new OrderCreatedEvent(
+            eventId,
             order.Id,
             order.CustomerName,
             order.ProductId,
@@ -40,6 +42,7 @@ public class CreateOrderUseCase
 
         return new CreateOrderResponse(
             order.Id,
+            eventId,
             order.CustomerName,
             order.ProductId,
             order.Quantity,

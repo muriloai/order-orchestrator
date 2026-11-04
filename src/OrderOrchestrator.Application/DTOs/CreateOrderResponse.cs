@@ -4,6 +4,7 @@ using OrderOrchestrator.Domain.Enums;
 
 public record CreateOrderResponse(
     Guid OrderId,
+    Guid EventId,
     string CustomerName,
     string ProductId,
     int Quantity,

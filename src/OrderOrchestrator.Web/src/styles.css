@@ -1,0 +1,134 @@
+/* Global Custom Animations for Order Orchestrator EDA Flow */
+
+@keyframes beamDash {
+  from {
+    stroke-dashoffset: 48;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.animate-beam-dash {
+  animation: beamDash 1.2s linear infinite;
+}
+
+@keyframes beamDashFast {
+  from {
+    stroke-dashoffset: 32;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.animate-beam-fast {
+  animation: beamDashFast 0.6s linear infinite;
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.2);
+    border-color: rgba(16, 185, 129, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(16, 185, 129, 0.6);
+    border-color: rgba(16, 185, 129, 0.9);
+  }
+}
+
+.animate-pulse-glow-emerald {
+  animation: pulseGlow 1.8s ease-in-out infinite;
+}
+
+@keyframes pulseGlowOrange {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(249, 115, 22, 0.2);
+    border-color: rgba(249, 115, 22, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(249, 115, 22, 0.6);
+    border-color: rgba(249, 115, 22, 0.9);
+  }
+}
+
+.animate-pulse-glow-orange {
+  animation: pulseGlowOrange 1.8s ease-in-out infinite;
+}
+
+@keyframes pulseGlowCyan {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(6, 182, 212, 0.2);
+    border-color: rgba(6, 182, 212, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(6, 182, 212, 0.6);
+    border-color: rgba(6, 182, 212, 0.9);
+  }
+}
+
+.animate-pulse-glow-cyan {
+  animation: pulseGlowCyan 1.8s ease-in-out infinite;
+}
+
+@keyframes pulseGlowPurple {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(168, 85, 247, 0.2);
+    border-color: rgba(168, 85, 247, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(168, 85, 247, 0.6);
+    border-color: rgba(168, 85, 247, 0.9);
+  }
+}
+
+.animate-pulse-glow-purple {
+  animation: pulseGlowPurple 1.8s ease-in-out infinite;
+}
+
+@keyframes spinSlow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-slow {
+  animation: spinSlow 6s linear infinite;
+}
+
+@keyframes conveyorMove {
+  0% {
+    transform: translateX(-4px);
+    opacity: 0.8;
+  }
+  50% {
+    transform: translateX(0px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(4px);
+    opacity: 0.8;
+  }
+}
+
+.animate-conveyor {
+  animation: conveyorMove 1.5s ease-in-out infinite alternate;
+}
+
+@keyframes radarRing {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+.animate-radar-ring {
+  animation: radarRing 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+}

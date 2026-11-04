@@ -12,6 +12,8 @@ public class AppDbContext : DbContext
     public DbSet<Order> Orders => Set<Order>();
     public DbSet<Inventory> Inventories => Set<Inventory>();
     public DbSet<NotificationLog> NotificationLogs => Set<NotificationLog>();
+    public DbSet<ProcessedEvent> ProcessedEvents => Set<ProcessedEvent>();
+    public DbSet<SimulationState> SimulationStates => Set<SimulationState>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -26,6 +28,8 @@ public class AppDbContext : DbContext
             entity.Property(o => o.Quantity).IsRequired();
             entity.Property(o => o.TotalAmount).HasColumnType("decimal(18,2)").IsRequired();
             entity.Property(o => o.Status).HasConversion<string>().HasMaxLength(50).IsRequired();
+            entity.Property(o => o.ProcessingAttempts).IsRequired().HasDefaultValue(0);
+            entity.Property(o => o.LastProcessingError).HasMaxLength(1000);
             entity.Property(o => o.CreatedAt).IsRequired();
             entity.Property(o => o.UpdatedAt);
         });
@@ -48,6 +52,25 @@ public class AppDbContext : DbContext
             entity.Property(n => n.CustomerName).IsRequired().HasMaxLength(200);
             entity.Property(n => n.Message).IsRequired().HasMaxLength(1000);
             entity.Property(n => n.SentAt).IsRequired();
+        });
+
+        modelBuilder.Entity<ProcessedEvent>(entity =>
+        {
+            entity.ToTable("ProcessedEvents");
+            entity.HasKey(p => new { p.ConsumerName, p.EventId });
+            entity.Property(p => p.ConsumerName).IsRequired().HasMaxLength(100);
+            entity.Property(p => p.EventId).IsRequired();
+            entity.Property(p => p.OrderId).IsRequired();
+            entity.Property(p => p.ProcessedAt).IsRequired();
+            entity.HasIndex(p => p.OrderId);
+        });
+
+        modelBuilder.Entity<SimulationState>(entity =>
+        {
+            entity.ToTable("SimulationStates");
+            entity.HasKey(s => s.Id);
+            entity.Property(s => s.LastFaultTriggered).HasMaxLength(200);
+            entity.Property(s => s.UpdatedAt).IsRequired();
         });
     }
 }

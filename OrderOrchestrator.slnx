@@ -4,5 +4,6 @@
     <Project Path="src/OrderOrchestrator.Application/OrderOrchestrator.Application.csproj" />
     <Project Path="src/OrderOrchestrator.Domain/OrderOrchestrator.Domain.csproj" />
     <Project Path="src/OrderOrchestrator.Infrastructure/OrderOrchestrator.Infrastructure.csproj" />
+    <Project Path="src/OrderOrchestrator.Worker/OrderOrchestrator.Worker.csproj" />
   </Folder>
 </Solution>

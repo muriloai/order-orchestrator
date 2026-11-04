@@ -1,0 +1,119 @@
+# Commit Message Guidelines
+
+CRITICAL INSTRUCTION: You MUST ALWAYS generate a multi-line commit message. NEVER generate only a single subject line.
+Structure: Subject line, then ONE blank line, then a bulleted list in the body detailing the changes.
+
+## Language
+
+- Write all commit messages in **English**.
+- Use clear, natural, professional language.
+- Avoid vague phrases.
+
+## Format (MANDATORY MULTI-LINE)
+
+<type>(<scope>): <short description>
+
+- Added [Class/File] to [reason]
+- Implemented [Feature] to handle [logic]
+- Updated [Component] because [context]
+
+The `scope` is optional and should only be included when it adds useful context.
+
+Examples:
+feat(auth): add password reset flow
+fix(payments): prevent duplicate transaction processing
+refactor(users): simplify profile mapping logic
+test(api): add coverage for invalid request scenarios
+chore(infra): add docker-compose and gitignore
+
+## Commit Types
+
+Use the most appropriate type:
+
+- `feat`: introduces new functionality (DO NOT use for infrastructure or config files).
+- `fix`: fixes incorrect behavior or a defect
+- `refactor`: restructures code without changing external behavior
+- `perf`: improves performance
+- `test`: adds or updates automated tests
+- `docs`: changes documentation only
+- `style`: formatting or code-style changes without behavior changes
+- `build`: changes dependencies, build scripts, packaging, or build configuration
+- `ci`: changes CI/CD pipelines or automation
+- `chore`: maintenance work, infrastructure, config files (e.g. docker-compose, .gitignore).
+- `revert`: reverts a previous commit
+
+Do not use `feat` for every implementation change. Choose the type according to the actual purpose of the change.
+
+## Subject Line (Strict Rules)
+
+The subject must:
+
+- Start with a lowercase verb in the imperative mood (e.g., "add", "fix").
+- Describe the outcome, not the activity.
+- **Be EXACTLY ONE single, unbroken line.**
+- **Keep it under 10 words total. Do NOT count characters, just use fewer words.**
+- **NEVER use ellipses (`...`) under any circumstances.**
+- **If the text is too long, REWRITE it to be shorter. Do not cut words in half.**
+- Never end with a period.
+
+## Human-Written Style
+
+Commit messages must read naturally and professionally.
+Avoid robotic wording. Prefer direct language. Do not describe obvious implementation mechanics unless they are relevant to understanding the change.
+
+## Scope
+
+Use a scope when the affected domain, module, layer, or feature is clear.
+Avoid scopes based solely on filenames unless the filename represents a meaningful architectural component. Keep scope names short, lowercase, and consistent with the repository.
+
+## Understanding the Change
+
+Before generating the message:
+
+1. Analyze the actual changed code.
+2. Identify the primary intent of the change.
+3. Distinguish between the root change and incidental edits.
+4. Choose the commit type based on intent.
+5. Select a scope only when it improves clarity.
+6. Describe the observable result of the change.
+
+## Multiple Changes
+
+When several related changes belong to the same purpose, summarize the common outcome.
+When staged changes contain multiple unrelated concerns, identify the dominant change.
+
+## Breaking Changes
+
+When a change intentionally introduces a breaking API or behavior change, use:
+`feat(api)!: replace legacy authentication endpoints`
+
+## Commit Body (Strict Rules)
+
+- You MUST include a detailed body for the commit to explain the specific changes.
+- Leave exactly ONE blank line between the subject line and the body.
+- Format the body as a bulleted list, starting each item with `- `.
+- Use the bullet points to detail WHAT was added, modified, or removed, and WHY.
+- Keep the bullet points concise but informative enough for someone reading the GitHub history.
+
+## Output Rules (CRITICAL)
+
+When asked to generate a commit message:
+
+- Return ONLY the raw commit message.
+- Do NOT output any markdown blocks (do not wrap in ```).
+- Do not explain the reasoning.
+- Do not wrap the message in quotation marks.
+- Do not prefix it with `Commit message:`.
+- Do not add emojis unless explicitly requested.
+- Do not mention that the message was AI-generated.
+- Do not output bullet points for multiple changes unless absolutely necessary in the body.
+
+## STRICT OUTPUT TEMPLATE
+
+You MUST format your final response EXACTLY like this structure below. Do not deviate from this template:
+
+<type>(<scope>): <subject line under 10 words>
+
+- Added [Class/File] to [reason]
+- Implemented [Feature] to handle [logic]
+- Updated [Component] because [context]

@@ -1,14 +1,20 @@
 namespace OrderOrchestrator.Infrastructure.Workers;
 
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using OpenTelemetry;
+using OpenTelemetry.Context.Propagation;
+using OpenTelemetry.Trace;
 using OrderOrchestrator.Application.DTOs;
+using OrderOrchestrator.Application.Interfaces;
 using OrderOrchestrator.Domain.Entities;
 using OrderOrchestrator.Domain.Interfaces;
+using OrderOrchestrator.Infrastructure.Observability;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
@@ -84,6 +90,24 @@ public class NotificationWorker : BackgroundService
                 var consumer = new AsyncEventingBasicConsumer(channel);
                 consumer.ReceivedAsync += async (_, ea) =>
                 {
+                    var propagationContext = Propagators.DefaultTextMapPropagator.Extract(
+                        default,
+                        ea.BasicProperties.Headers,
+                        (headers, key) =>
+                        {
+                            if (headers != null && headers.TryGetValue(key, out var val))
+                            {
+                                if (val is byte[] bytes) return new[] { Encoding.UTF8.GetString(bytes) };
+                                if (val is string str) return new[] { str };
+                            }
+                            return Enumerable.Empty<string>();
+                        });
+
+                    using var activity = TelemetryConstants.ActivitySource.StartActivity(
+                        $"{QueueName} process",
+                        ActivityKind.Consumer,
+                        propagationContext.ActivityContext);
+
                     try
                     {
                         var json = Encoding.UTF8.GetString(ea.Body.ToArray());
@@ -94,28 +118,51 @@ public class NotificationWorker : BackgroundService
 
                         if (orderCreated is not null)
                         {
+                            if (activity is not null)
+                            {
+                                activity.SetTag("messaging.system", "rabbitmq");
+                                activity.SetTag("messaging.destination.name", QueueName);
+                                activity.SetTag("messaging.operation.type", "process");
+                                activity.SetTag("order.id", orderCreated.OrderId.ToString());
+                                activity.SetTag("event.id", orderCreated.EventId.ToString());
+                            }
+
                             var notificationMessage = $"Notificação de pedido: Cliente {orderCreated.CustomerName}, seu pedido #{orderCreated.OrderId} de {orderCreated.Quantity}x {orderCreated.ProductId} (Total: R$ {orderCreated.TotalAmount:F2}) foi recebido e está em processamento.";
 
-                            _logger.LogInformation("[NotificationWorker] Enviando e-mail para {Customer}: \"{Message}\"",
-                                orderCreated.CustomerName, notificationMessage);
+                            _logger.LogInformation(
+                                "[NotificationWorker] Enviando e-mail para {Customer}: \"{Message}\" [TraceId: {TraceId}, SpanId: {SpanId}]",
+                                orderCreated.CustomerName, notificationMessage, activity?.TraceId, activity?.SpanId);
 
                             using var scope = _scopeFactory.CreateScope();
                             var notificationRepo = scope.ServiceProvider.GetRequiredService<INotificationLogRepository>();
+                            var notifier = scope.ServiceProvider.GetService<IEventStreamNotifier>();
 
-                            var log = new NotificationLog(
+                            var notificationLog = new NotificationLog(
                                 orderCreated.OrderId,
                                 orderCreated.CustomerName,
                                 notificationMessage
                             );
 
-                            await notificationRepo.AddAsync(log, stoppingToken);
+                            await notificationRepo.AddAsync(notificationLog, stoppingToken);
+
+                            if (notifier is not null)
+                            {
+                                await notifier.NotifyNotificationDispatchedAsync(
+                                    orderCreated.OrderId,
+                                    orderCreated.CustomerName,
+                                    notificationMessage,
+                                    stoppingToken
+                                );
+                            }
                         }
 
                         await channel.BasicAckAsync(ea.DeliveryTag, multiple: false);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "[NotificationWorker] Erro inesperado ao processar mensagem da fila '{Queue}'.", QueueName);
+                        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                        activity?.AddException(ex);
+                        _logger.LogError(ex, "[NotificationWorker] Erro inesperado ao processar notificação. [TraceId: {TraceId}, SpanId: {SpanId}]", activity?.TraceId, activity?.SpanId);
                         await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: false);
                     }
                 };
@@ -127,7 +174,7 @@ public class NotificationWorker : BackgroundService
                     cancellationToken: stoppingToken
                 );
 
-                _logger.LogInformation("[NotificationWorker] Ouvindo fila '{Queue}' vinculada ao padrão '{Pattern}'.", QueueName, RoutingKeyPattern);
+                _logger.LogInformation("[NotificationWorker] Ouvindo fila '{Queue}' vinculada ao padrão '{Key}'.", QueueName, RoutingKeyPattern);
                 await Task.Delay(Timeout.Infinite, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

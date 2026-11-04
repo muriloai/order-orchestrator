@@ -10,6 +10,8 @@ public class Order
     public int Quantity { get; private set; }
     public decimal TotalAmount { get; private set; }
     public OrderStatus Status { get; private set; }
+    public int ProcessingAttempts { get; private set; }
+    public string? LastProcessingError { get; private set; }
     public DateTime CreatedAt { get; private set; }
     public DateTime? UpdatedAt { get; private set; }
 
@@ -32,18 +34,28 @@ public class Order
         Quantity = quantity;
         TotalAmount = totalAmount;
         Status = OrderStatus.Pending;
+        ProcessingAttempts = 0;
         CreatedAt = DateTime.UtcNow;
+    }
+
+    public void RecordProcessingAttempt(string? error = null)
+    {
+        ProcessingAttempts++;
+        LastProcessingError = error;
+        UpdatedAt = DateTime.UtcNow;
     }
 
     public void MarkAsProcessed()
     {
         Status = OrderStatus.Processed;
+        LastProcessingError = null;
         UpdatedAt = DateTime.UtcNow;
     }
 
-    public void MarkAsFailed()
+    public void MarkAsFailed(string? reason = null)
     {
         Status = OrderStatus.Failed;
+        LastProcessingError = reason;
         UpdatedAt = DateTime.UtcNow;
     }
 }

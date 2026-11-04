@@ -25,6 +25,17 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
 
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: order-orchestrator-jaeger
+    restart: unless-stopped
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+
 volumes:
   sqlserver_data:
   rabbitmq_data:
