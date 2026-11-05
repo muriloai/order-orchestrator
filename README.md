@@ -1,70 +1,110 @@
 # Order Orchestrator
 
-> **"O pedido foi aceito. Por que o saldo continua em 10?"**
-> Uma arquitetura de referência em **.NET 10**, **C# 14**, **RabbitMQ**, **SQL Server** e **OpenTelemetry (Jaeger)** demonstrando como solucionar o problema real de consistência eventual, falhas assíncronas e evitar a dupla dedução de estoque (*overdeduction*) em sistemas distribuídos.
+> **"O pedido foi aceito. Por que o saldo continua em 10?"**  
+> Arquitetura de referencia em **.NET 10**, **C# 14**, **RabbitMQ**, **SQL Server** e **OpenTelemetry (Jaeger)** projetada para garantir consistencia eventual, deduplicacao idempotente de estoque e observabilidade distribuida entre processos.
 
 ---
 
-## 📌 O que é este projeto?
+## Sumario
 
-O **Order Orchestrator** é uma aplicação completa de mensageria e orquestração de pedidos em microsserviços. Ele separa a recepção do pedido (**`order-api`**) do processamento físico de estoque (**`inventory-worker`**) em processos independentes, garantindo que o cliente receba confirmação imediata enquanto a retaguarda processa com resiliência, idempotência estrita e rastreabilidade ponta a ponta.
+- [Visao Geral do Projeto](#visao-geral-do-projeto)
+- [O Problema Real de Negocio](#o-problema-real-de-negocio)
+- [Objetivo do Projeto](#objetivo-do-projeto)
+- [Arquitetura e Design](#arquitetura-e-design)
+- [Diagrama de Interacao dos Componentes](#diagrama-de-interacao-dos-componentes)
+- [Glossario do Negocio](#glossario-do-negocio)
+- [Demonstracao Pratica: Cenario 10 -> 7 -> 7](#demonstracao-pratica-cenario-10---7---7)
+- [Execucao Isolada por Fases](#execucao-isolada-por-fases)
+- [Observabilidade com OpenTelemetry e Jaeger](#observabilidade-com-opentelemetry-e-jaeger)
+- [Consultas SQL de Auditoria](#consultas-sql-de-auditoria)
+- [Instrucoes de Execucao Local](#instrucoes-de-execucao-local)
 
 ---
 
-## 🛑 O Problema Real do Mundo dos Negócios
+## Visao Geral do Projeto
 
-Em plataformas de comércio eletrônico e sistemas orientados a eventos (EDA), existe um dilema clássico entre **velocidade para o cliente** e **consistência no estoque**:
+O **Order Orchestrator** e uma solucao corporativa para processamento distribuido de pedidos baseada no padrao arquitetural orientado a eventos (EDA - *Event-Driven Architecture*).
 
-```text
-  [Cliente] ──(1. Comprar 3 un)──> [API] ──(2. Salva Pedido + Publica na Fila)──> [RabbitMQ]
-                                     │
-                                     └──(3. HTTP 201 Created!)──> [Cliente Feliz]
-                                                                        │
-                                                                   (Mas e o estoque?)
-                                                                        ▼
-                                                             [Worker Falha no Banco]
-                                                                        ▼
-                                                      O saldo de 10 NÃO baixou para 7!
+A solucao desacopla a camada de ingestao HTTP (**`order-api`**) do processamento assincrono de baixa de inventario (**`inventory-worker`**) em processos de sistema operacional distintos. O objetivo e fornecer resposta imediata ao usuario final enquanto a retaguarda assegura consistencia transacional, tolerancia a falhas e eliminacao de duplicidade de estoque (*overdeduction*).
+
+---
+
+## O Problema Real de Negocio
+
+Em sistemas distribuidos de comercio eletronico, existe uma divergencia intrinseca entre o tempo de resposta da requisicao do cliente e o processamento seguro de inventario.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Cliente as Cliente
+    participant API as order-api
+    participant RMQ as RabbitMQ
+    participant Worker as inventory-worker
+    participant DB as SQL Server
+
+    Cliente->>API: POST /orders (Compra 3 unidades)
+    API->>DB: Salva Pedido (Status = Pending)
+    API->>RMQ: Publica Mensagem (order.created)
+    API-->>Cliente: Retorna HTTP 201 Created
+    RMQ->>Worker: Entrega Mensagem (Tentativa 1)
+    Worker->>DB: Executa Deducao no Banco de Dados
+    DB-->>Worker: Falha Transitoria (Conexao Recusada / Timeout)
+    Worker->>DB: Rollback da Transacao
+    Note over DB: Saldo em estoque permanece inalterado em 10 unidades
 ```
 
-### Os 3 Riscos Críticos em Produção:
-1. **O Abismo da Assincronia**: A API responde **`HTTP 201 Created`** ao cliente em milissegundos. Porém, se o worker de estoque falhar por uma oscilação de rede ou queda do banco na primeira tentativa, a dedução física não ocorre e o saldo permanece em **10**. O cliente acha que comprou, mas o produto não foi baixado.
-2. **O Risco da Dupla Baixa (*Overdeduction*)**: Filas de mensagens (RabbitMQ, Kafka, AWS SQS) garantem entrega no mínimo uma vez (*at-least-once delivery*). Se o worker salvar no banco mas cair uma fração de segundo antes de avisar a fila (ACK), a fila reentregará a mensagem. **Sem proteção de idempotência, o sistema baixaria novamente, reduzindo o saldo para 4 indevidamente!**
-3. **Falta de Rastreabilidade**: Quando uma falha ocorre em um processo em segundo plano, os operadores de suporte não conseguem correlacionar a requisição HTTP original com o log do erro na fila.
+### Principais Riscos em Ambientes de Producao
+
+1. **Assincronia sem Rastreabilidade**: A API confirma o recebimento com status `HTTP 201 Created`. No entanto, se o consumidor de retaguarda falhar na primeira tentativa de conexao com o banco, o saldo fisico permanece inalterado em 10 unidades. Sem instrumentacao tecnica, o operador de suporte nao consegue diagnosticar o motivo da retencao.
+2. **Dupla Deducao de Estoque (*Overdeduction*)**: Infraestruturas de mensageria operam sob a garantia de entrega no minimo uma vez (*at-least-once delivery*). Caso o worker conclua a gravacao no banco mas encerre abruptamente antes de transmitir o sinal de reconhecimento (`ACK`) a fila, a mensagem sera reentregue. Sem um mecanismo rigido de idempotencia, o saldo sofreria uma segunda baixa indevida, caindo de 7 para 4.
+3. **Condicoes de Corrida por Mensagens Paralelas**: Publicacoes duplicadas disparadas simultaneamente podem ser consumidas por threads paralelas. Sem isolamento relacional exclusivo, ambas podem calcular o saldo concorrentemente e corromper o estoque.
 
 ---
 
-## 🎯 O Objetivo deste Projeto
+## Objetivo do Projeto
 
-Demonstrar de forma prática, reproduzível e com 1 clique como resolver definitivamente esse problema com 4 garantias arquiteturais:
+Demonstrar a implementacao das quatro garantias fundamentais da engenharia de software distribuida:
 
-| Garantia | Como é resolvido na prática? |
-| :--- | :--- |
-| **1. A Sequência 10 → 7 → 7** | Mesmo que haja falha na 1ª tentativa e reentrega na 2ª e 3ª tentativas, a baixa ocorre **uma única vez**: o saldo inicia em **10**, recupera para **7** e, mesmo com reentrega forçada, permanece em **7** (nunca 4!). |
-| **2. Transação Atômica no SQL Server** | A dedução do estoque, a inserção na tabela `ProcessedEvents` (chave única por consumidor e evento) e a atualização do pedido ocorrem sob a **mesma transação relacional**. |
-| **3. ACK Estritamente Pós-Commit** | O consumidor só envia o `BasicAckAsync` ao RabbitMQ **após** o banco de dados confirmar o commit com sucesso. |
-| **4. Rastreabilidade com OpenTelemetry** | A requisição HTTP na API e o consumo no Worker compartilham o mesmo `TraceId` via W3C (`traceparent`). O operador enxerga no Jaeger exatamente por que a tentativa 1 falhou e a tentativa 2 teve sucesso. |
+1. **Sequencia Transacional 10 -> 7 -> 7**:
+   - **Saldo 10**: Pedido aceito pela API. A primeira tentativa no worker sofre falha transitoria simulada. O pedido exibe o erro e o saldo permanece intacto em 10.
+   - **Saldo 7**: Apos liberacao da dependencia, o worker consome a reentrega e executa a baixa correta para 7 unidades.
+   - **Saldo 7 (Idempotente)**: Uma queda pós-commit e pré-ACK e simulada. O RabbitMQ reentrega o evento com o mesmo identificador (`EventId`). O worker identifica o processamento previo, confirma o `ACK` e ignora nova deducao, mantendo o saldo estritamente em 7.
+2. **Atomicidade Relacional no SQL Server**:
+   A baixa de estoque, o registro da chave de deduplicacao na tabela `ProcessedEvents` e a mudanca de estado do pedido sao executados sob a mesma transacao relacional (`SqlTransaction`).
+3. **ACK Estritamente Pos-Commit**:
+   O envio de `BasicAckAsync` ao RabbitMQ e realizado apenas apos o encerramento com sucesso do commit fisico no banco de dados.
+4. **Propagacao de Contexto W3C (OpenTelemetry)**:
+   A requisicao HTTP original e as tentativas de consumo compartilham o mesmo `TraceId` atraves dos cabecalhos da mensageria, com geracao de `SpanId` exclusivo por tentativa.
 
 ---
 
-## 🗺️ Fluxo Visual: Como os Componentes Interagem
+## Arquitetura e Design
 
-### Diagrama de Hierarquia e Comunicação dos Componentes
+A solucao adota padroes formais de desenvolvimento:
 
-O diagrama abaixo ilustra a arquitetura completa e o caminho percorrido pela mensagem:
+- **Clean Architecture & Domain-Driven Design (DDD)**: Camadas estritas de Dominio, Aplicacao, Infraestrutura, Apresentacao e Worker.
+- **Idempotent Consumer Pattern**: Uso da tabela `ProcessedEvents` com chave primaria composta `(ConsumerName, EventId)`. A restricao unica do banco de dados atua como barreira contra baixas duplicadas.
+- **Politica de Retentativas com Dead Letter Queue (DLQ)**: Tratamento de erros transitorios via cabecalho de controle (`x-attempt-count`) com limite de 3 tentativas e roteamento automatico para a fila `inventory-dlq` em caso de falha permanente.
+- **Separacao de Processos de Execucao**: A API Web e o Worker operam como executaveis .NET desacoplados para simular a distribuicao de servicos em producao.
+
+---
+
+## Diagrama de Interacao dos Componentes
+
+O fluxo de dados entre os componentes ocorre de forma hierarquica conforme ilustrado:
 
 ```mermaid
 graph TD
-    subgraph Camada_Apresentacao["1. Camada de Apresentação"]
+    subgraph Apresentacao["1. Camada de Apresentacao"]
         WebUI["Frontend Web Angular 22 (:4200)"]
-        Scripts["Scripts de Teste / CLI PowerShell"]
+        CLI["Scripts Automatizados PowerShell"]
     end
 
     subgraph Processo_API["2. Processo API: order-api (:5000)"]
         Endpoint["POST /orders (Minimal API)"]
         UseCase["CreateOrderUseCase"]
         ApiDb["AppDbContext (EF Core)"]
-        Publisher["RabbitMqPublisher (Injeta W3C Traceparent)"]
+        Publisher["RabbitMqPublisher (Injeta W3C Headers)"]
     end
 
     subgraph Mensageria["3. Mensageria: RabbitMQ (:5672)"]
@@ -76,192 +116,195 @@ graph TD
 
     subgraph Processo_Worker["4. Processo Consumidor: inventory-worker"]
         Worker["InventoryWorker (BackgroundService)"]
-        GuardIdempotencia["Guarda de Idempotência (ProcessedEvents)"]
-        TxAtomica["Transação SQL Atômica (Dedução + Evento + Pedido)"]
-        CommitAck["ACK Estritamente Pós-Commit"]
+        IdempotencyCheck["Verificacao de Idempotencia (ProcessedEvents)"]
+        AtomicTx["Transacao SQL Atomica (Deducao + EventId + Pedido)"]
+        AckHandler["Disparo de ACK (Pos-Commit)"]
     end
 
-    subgraph Banco_Dados["5. Banco de Dados: SQL Server (:1433)"]
+    subgraph Banco_Dados["5. Armazenamento Relacional: SQL Server (:1433)"]
         TblOrders[("Tabela Orders")]
         TblInventories[("Tabela Inventories")]
         TblProcessedEvents[("Tabela ProcessedEvents")]
     end
 
     subgraph Observabilidade["6. Observabilidade: OpenTelemetry"]
-        Jaeger[("Jaeger OTLP Dashboard (:16686)")]
+        Jaeger[("Painel Jaeger OTLP (:16686)")]
         ConsoleLogs["Logs Estruturados (TraceId / SpanId)"]
     end
 
-    %% Relações do Fluxo
+    %% Relacoes de Chamada
     WebUI -->|1. Envia Pedido| Endpoint
-    Scripts -->|1. Envia Pedido| Endpoint
+    CLI -->|1. Envia Pedido| Endpoint
 
     Endpoint --> UseCase
-    UseCase -->|2. Salva Pedido como Pending| ApiDb
+    UseCase -->|2. Grava Pedido Pending| ApiDb
     ApiDb --> TblOrders
 
     UseCase -->|3. Publica Evento| Publisher
     Publisher -->|Injeta Headers W3C| TopicEx
     TopicEx --> InvQueue
-    Endpoint -.->|4. Responde HTTP 201 Created| WebUI
+    Endpoint -.->|4. Retorna HTTP 201 Created| WebUI
 
     InvQueue -->|5. Entrega Mensagem| Worker
     Worker -->|6. Extrai Contexto W3C| Jaeger
-    Worker -->|7. Verifica se EventId já existe| GuardIdempotencia
-    GuardIdempotencia -.-> TblProcessedEvents
+    Worker -->|7. Consulta Idempotencia| IdempotencyCheck
+    IdempotencyCheck -.-> TblProcessedEvents
 
-    Worker -->|8. Executa no SQL Server| TxAtomica
-    TxAtomica --> TblInventories
-    TxAtomica --> TblProcessedEvents
-    TxAtomica --> TblOrders
+    Worker -->|8. Executa Transacao Atomica| AtomicTx
+    AtomicTx --> TblInventories
+    AtomicTx --> TblProcessedEvents
+    AtomicTx --> TblOrders
 
-    TxAtomica -->|9. Commit OK| CommitAck
-    CommitAck -->|10. BasicAck| InvQueue
+    AtomicTx -->|9. Sucesso no Commit| AckHandler
+    AckHandler -->|10. BasicAckAsync| InvQueue
 
-    Worker -.->|Se esgotar 3 tentativas| DLX
+    Worker -.->|Falha Permanente (Apos 3 tentativas)| DLX
     DLX --> DLQ
 
-    Processo_API -.->|Spans HTTP e Publish| Jaeger
-    Processo_Worker -.->|Spans Consume e SQL| Jaeger
-    Processo_Worker -.->|Logs com TraceId| ConsoleLogs
+    Processo_API -.->|Spans de HTTP e Publicacao| Jaeger
+    Processo_Worker -.->|Spans de Consumo e SQL| Jaeger
+    Processo_Worker -.->|Logs com TraceId e SpanId| ConsoleLogs
 ```
 
 ---
 
-## 📖 Glossário do Negócio
+## Glossario do Negocio
 
-Conceitos essenciais explicados de forma simples e direta:
-
-| Termo | Significado no Projeto |
+| Conceito | Descricao Tecnica e Aplicacao |
 | :--- | :--- |
-| **Pedido (`Order`)** | Registro da compra criado pelo cliente. Nasce com status `Pending (1)`. |
-| **Saldo Disponível (`AvailableQuantity`)** | Quantidade física pronta para entrega. Inicia com 10 unidades. |
-| **Baixa de Estoque** | Subtração atômica da quantidade pedida do saldo disponível no banco de dados. |
-| **`OrderId`** | Identificador de negócio do pedido (GUID v7). Não muda durante reprocessamentos. |
-| **`EventId`** | Identificador único da mensagem/evento. Serve como base para a **deduplicação**. |
-| **`ProcessedEvents`** | Tabela que guarda a chave primária `(ConsumerName, EventId)`. Garante que um consumidor nunca processe o mesmo evento duas vezes. |
-| **Idempotência** | Propriedade que garante que executar uma ação várias vezes produz o mesmo efeito de executá-la uma única vez (**10 → 7 → 7**, e nunca **4**). |
-| **Reentrega (`Redelivery`)** | Reenvio automático de uma mensagem não confirmada pelo RabbitMQ após falha ou queda do worker. |
-| **`ACK` (`BasicAck`)** | Confirmação enviada à fila autorizando a remoção definitiva da mensagem. **Só ocorre após o commit no banco**. |
-| **Falha Transitória** | Falha momentânea (ex: timeout de rede com o banco). Resolvida automaticamente via retentativa com backoff. |
-| **`DLQ` (`Dead Letter Queue`)** | Fila de mensagens mortas (`inventory-dlq`). Recebe mensagens que falharam após o limite de 3 tentativas para análise do operador. |
-| **`TraceId` & `SpanId`** | Identificadores W3C da telemetria. O `TraceId` acompanha a transação inteira; cada tentativa individual ganha um `SpanId` próprio. |
+| **Pedido (`Order`)** | Entidade de negocio que representa a intencao de compra. Registrada inicialmente com status `Pending (1)`. |
+| **Saldo Disponivel (`AvailableQuantity`)** | Saldo fisico disponivel para alocacao imediata na tabela `Inventories`. Saldo inicial de 10 unidades. |
+| **Baixa de Estoque** | Atualizacao decremental do saldo disponivel equivalente a quantidade solicitada no pedido. |
+| **`OrderId`** | Identificador UUID v7 da entidade de negocio do pedido. Permanece identico em reprocessamentos. |
+| **`EventId`** | Identificador exclusivo do evento emitido. Utilizado como chave primaria de deduplicacao por consumidor. |
+| **`ProcessedEvents`** | Tabela relacional com chave primaria composta `(ConsumerName, EventId)` responsavel pela garantia de idempotencia. |
+| **Idempotencia** | Propriedade de uma operacao que pode ser aplicada multiplas vezes sem alterar o resultado alem da aplicacao inicial (**10 -> 7 -> 7**). |
+| **Reentrega (`Redelivery`)** | Reenvio automatico de mensagem executado pelo RabbitMQ apos rejeicao, timeout ou queda de conexao com o worker. |
+| **`BasicAckAsync`** | Confirmacao formal transmitida pelo consumidor a mensageria autorizando a remocao definitiva da mensagem. |
+| **Falha Transitoria** | Indisponibilidade momentanea de infraestrutura (ex: perda temporaria de conexao com o banco), solucionavel por retentativas. |
+| **Falha Permanente** | Inconsistencia irremediavel que direciona o evento a fila morta (`inventory-dlq`) para avaliacao do operador. |
+| **`TraceId` e `SpanId`** | Metadados do padrao W3C Trace Context que correlacionam operacoes entre processos independentes no Jaeger. |
 
 ---
 
-## 🚀 Demonstração Rápida: Cenário 10 → 7 → 7
+## Demonstracao Pratica: Cenario 10 -> 7 -> 7
 
-Você pode validar todo o comportamento automaticamente executando um único comando no PowerShell:
+O ciclo completo de validacao pode ser executado de forma automatizada via PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ./scripts/run-full-demonstration.ps1
 ```
 
-Esse script executa o ciclo completo em 4 fases:
+### Transicoes de Estado Executadas no Laboratorio
 
-```text
-[Fase 1: Falha Transitória]   Saldo 10  ──(Tentativa 1 com Erro)──>  Saldo permanece em 10 (Pedido exibe erro)
-[Fase 2: Recuperação]         Saldo 10  ──(Tentativa 2 com Sucesso)─>  Saldo baixa para 7
-[Fase 3: Queda Pós-Commit]    Saldo 7   ──(Reentrega do mesmo EventId)─> Saldo continua em 7 (Deduplicação atua)
-[Fase 4: Reenvio Concorrente] Saldo 10  ──(2 envios no mesmo instante)─> Saldo baixa para 7 (Apenas 1 baixa)
+```mermaid
+flowchart LR
+    Fase1["Fase 1: Falha Transitoria<br/>Tentativa 1 com Erro"] -->|Saldo permanece| S1["Saldo: 10<br/>Status: Pending"]
+    S1 --> Fase2["Fase 2: Recuperacao<br/>Tentativa 2 com Sucesso"]
+    Fase2 -->|Deducao unica| S2["Saldo: 7<br/>Status: Processed"]
+    S2 --> Fase3["Fase 3: Queda Pos-Commit<br/>Reentrega do mesmo EventId"]
+    Fase3 -->|Deduplicacao atua| S3["Saldo: 7<br/>Baixa Duplicada Evitada"]
+    S3 --> Fase4["Fase 4: Concorrencia Paralela<br/>2 envios no mesmo instante"]
+    Fase4 -->|Chave unica garante| S4["Saldo: 7<br/>Apenas 1 deducao gravada"]
 ```
 
 ---
 
-## 🔬 Passo a Passo Detalhado (Comandos Isolados)
+## Execucao Isolada por Fases
 
-Se quiser disparar e inspecionar cada fase individualmente:
+Caso seja necessario demonstrar ou auditar etapas pontuais:
 
-### 1. Provocar a Falha Transitória (Saldo fica em 10)
-Ativa a simulação de falha no worker e envia um pedido de 3 unidades do produto `PROD-001` (saldo inicial 10):
+### 1. Simular Falha Transitoria
 ```powershell
 powershell -ExecutionPolicy Bypass -File ./scripts/simulate-transient-failure.ps1
 ```
-* **Resultado**: A API responde `HTTP 201 Created`. A tentativa 1 no worker falha antes do commit. O pedido registra `LastProcessingError` no banco e o **saldo de estoque continua em 10**!
 
-### 2. Liberar a Dependência e Recuperar (Saldo vai para 7)
-Desativa a falha simulada e aguarda a reentrega da mensagem:
+### 2. Liberar Dependencia e Reprocessar
 ```powershell
 powershell -ExecutionPolicy Bypass -File ./scripts/release-fault.ps1
 ```
-* **Resultado**: O worker processa a tentativa 2, deduz o estoque, grava em `ProcessedEvents`, atualiza o pedido para `Processed` e confirma com ACK. O **saldo vai para 7**!
 
-### 3. Simular Queda Pós-Commit e Pré-ACK (Saldo continua em 7)
-Simula o worker comitando no banco mas sofrendo queda antes de enviar o ACK para o RabbitMQ:
+### 3. Simular Queda Pos-Commit
 ```powershell
 powershell -ExecutionPolicy Bypass -File ./scripts/simulate-post-commit-crash.ps1
 ```
-* **Resultado**: O RabbitMQ reentrega a mensagem com o mesmo `EventId`. O worker consulta a tabela `ProcessedEvents`, reconhece a duplicata, emite o ACK e não altera o estoque. O **saldo permanece em 7** (evitando o erro clássico de cair para 4).
 
-### 4. Testar Reenvio Paralelo Simultâneo
-Dispara 2 mensagens com o mesmo `EventId` exatamente ao mesmo tempo em threads concorrentes:
+### 4. Testar Concorrencia Paralela
 ```powershell
 powershell -ExecutionPolicy Bypass -File ./scripts/test-parallel-resend.ps1
 ```
-* **Resultado**: O bloqueio por chave única no SQL Server impede concorrência e apenas 1 dedução é realizada. O **saldo final é 7**.
 
 ---
 
-## 🔍 Observabilidade: Como o Operador Investiga?
+## Observabilidade com OpenTelemetry e Jaeger
 
-### 1. Visualizador Jaeger UI
-Abra no navegador: 👉 **[http://localhost:16686](http://localhost:16686)**
+O monitoramento centralizado esta disponivel localmente:
 
-- **Trace Unificado**: Selecione `order-api` ou `inventory-worker` e visualize o fluxo completo da requisição HTTP até o consumo no worker.
-- **Tentativas Distintas**: Cada tentativa de processamento recebe um `SpanId` exclusivo sob o mesmo `TraceId`. O operador visualiza a tentativa 1 com status vermelho de erro (e o stack trace) e a tentativa 2 com status verde de sucesso.
+- **Painel Jaeger UI**: [http://localhost:16686](http://localhost:16686)
+- **Localizacao dos Traces**: Selecionar os servicos `order-api` ou `inventory-worker` para visualizar a cadeia completa de spans.
+- **Rastreamento de Tentativas**: Cada entrega do worker possui um `SpanId` especifico sob o mesmo `TraceId`, permitindo identificar a falha da primeira tentativa e o exito da subsequente.
 
-### 2. Logs Estruturados no Console
-Cada mensagem de log inclui automaticamente o contexto de rastreio W3C:
+### Formato de Log Estruturado
+O console exibe correlacao W3C automatica:
 ```text
-[11:45:22 ERR] [TraceId: a95d1796d191fbcc498875ea219fa640 SpanId: 5df9e0ec84ef9ce1] Falha transitória: Conexão recusada na tentativa 1.
+[11:45:22 ERR] [TraceId: a95d1796d191fbcc498875ea219fa640 SpanId: 5df9e0ec84ef9ce1] Falha transitoria: Conexao recusada na tentativa 1.
 [11:45:24 INF] [TraceId: a95d1796d191fbcc498875ea219fa640 SpanId: 3c17849cb16f0ea9] [Tentativa 2] Estoque deduzido com sucesso para PROD-001. Novo saldo: 7.
 ```
 
-### 3. Consultas SQL de Evidência
-Audite os dados diretamente no SQL Server (`sa` / `SqlAdmin#2026!Order` na porta `1433`):
+---
+
+## Consultas SQL de Auditoria
+
+Execucao de consultas no SQL Server (`porta 1433`, usuario `sa`):
 
 ```sql
--- 1. Verifica se o saldo final é exatamente 7
-SELECT ProductId, AvailableQuantity, UpdatedAt FROM Inventories WHERE ProductId = 'PROD-001';
+-- 1. Inspecao do saldo atual do produto
+SELECT ProductId, AvailableQuantity, ReservedQuantity, UpdatedAt 
+FROM Inventories 
+WHERE ProductId = 'PROD-001';
 
--- 2. Verifica a chave única gravada pelo consumidor
-SELECT ConsumerName, EventId, OrderId, ProcessedAt FROM ProcessedEvents ORDER BY ProcessedAt DESC;
+-- 2. Inspecao dos eventos persistidos para deduplicacao
+SELECT ConsumerName, EventId, OrderId, ProcessedAt 
+FROM ProcessedEvents 
+ORDER BY ProcessedAt DESC;
 
--- 3. Verifica o status do pedido, número de tentativas e erro registrado
-SELECT Id, Status, ProcessingAttempts, LastProcessingError FROM Orders ORDER BY CreatedAt DESC;
+-- 3. Inspecao do historico de tentativas e erros do pedido
+SELECT Id, Status, ProcessingAttempts, LastProcessingError, CreatedAt, UpdatedAt 
+FROM Orders 
+ORDER BY CreatedAt DESC;
 ```
 
 ---
 
-## 💻 Como Executar o Ambiente Localmente
+## Instrucoes de Execucao Local
 
-### 1. Iniciar Infraestrutura com Docker Compose
-Sobe o SQL Server, RabbitMQ e Jaeger em segundo plano:
+### 1. Inicializacao da Infraestrutura (Docker Compose)
+Inicia os servicos de SQL Server, RabbitMQ e Jaeger:
 ```bash
 docker compose up -d
 ```
-- **SQL Server**: `localhost:1433`
-- **RabbitMQ**: `localhost:5672` (Painel Web: `http://localhost:15672` - guest/guest)
-- **Jaeger UI**: `http://localhost:16686`
+- **SQL Server**: porta `1433`
+- **RabbitMQ**: porta `5672` (Painel Web: `http://localhost:15672` - guest/guest)
+- **Jaeger UI**: porta `16686`
 
-### 2. Iniciar a API (`order-api`)
+### 2. Inicializacao da API (`order-api`)
 ```bash
 dotnet run --project src/OrderOrchestrator.Api --launch-profile http
 ```
-- Disponível em: `http://localhost:5000` (Swagger interativo em `/swagger`)
+- Endpoint HTTP: `http://localhost:5000`
+- Documentacao Swagger: `http://localhost:5000/swagger`
 
-### 3. Iniciar o Worker de Estoque (`inventory-worker`)
-Em um terminal separado:
+### 3. Inicializacao do Consumidor (`inventory-worker`)
+Em um terminal dedicado:
 ```bash
 dotnet run --project src/OrderOrchestrator.Worker
 ```
 
-### 4. Iniciar o Frontend Web Angular (Opcional)
+### 4. Inicializacao do Frontend Web (Opcional)
 Em outro terminal:
 ```bash
 cd src/OrderOrchestrator.Web
 npm install
 npm start
 ```
-- Acesse o simulador gráfico em: `http://localhost:4200`
-- Oferece botões visuais para disparar compras, forçar falhas e acompanhar os eventos em tempo real.
+- Dashboard disponivel em: `http://localhost:4200`
