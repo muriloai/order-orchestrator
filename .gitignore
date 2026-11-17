@@ -484,3 +484,6 @@ $RECYCLE.BIN/
 # Node & Frontend
 **/node_modules/
 **/dist/
+
+# Local configs
+.cursorrules
